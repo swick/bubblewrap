@@ -8,7 +8,7 @@ srcd=$(cd $(dirname "$0") && pwd)
 
 bn=$(basename "$0")
 
-echo "1..58"
+echo "1..63"
 
 # Test help
 ${BWRAP} --help > help.txt
@@ -531,5 +531,113 @@ FOO=wrong BAR=wrong $RUN --clearenv /usr/bin/env > stdout
 echo "PWD=$(pwd -P)" > reference
 assert_files_equal stdout reference
 echo "ok - environment manipulation"
+
+if test -n "${bwrap_is_suid:-}"; then
+    echo "ok - # SKIP no --overlay support"
+    echo "ok - # SKIP no --overlay support"
+    echo "ok - # SKIP no --tmp-overlay support"
+    echo "ok - # SKIP no --ro-overlay support"
+    echo "ok - # SKIP no --overlay-src support"
+else
+    mkdir lower1 lower2 upper work
+    printf 1 > lower1/a
+    printf 2 > lower1/b
+    printf 3 > lower2/b
+    printf 4 > upper/a
+
+    # Check if unprivileged overlayfs is available
+    if ! unshare -rm mount -t overlay -o lowerdir=lower1,upperdir=upper,workdir=work overlay lower2; then
+        echo "ok - # SKIP no kernel support for unprivileged overlayfs"
+        echo "ok - # SKIP no kernel support for unprivileged overlayfs"
+        echo "ok - # SKIP no kernel support for unprivileged overlayfs"
+        echo "ok - # SKIP no kernel support for unprivileged overlayfs"
+        echo "ok - # SKIP no kernel support for unprivileged overlayfs"
+    else
+
+        # Test --overlay
+        if $RUN --overlay upper work /tmp true 2>err.txt; then
+            assert_not_reached At least one --overlay-src not required
+        fi
+        assert_file_has_content err.txt "^bwrap: --overlay requires at least one --overlay-src"
+        $RUN --overlay-src lower1 --overlay upper work /tmp/x/y/z cat /tmp/x/y/z/a > stdout
+        assert_file_has_content stdout '^4$'
+        $RUN --overlay-src lower1 --overlay upper work /tmp/x/y/z cat /tmp/x/y/z/b > stdout
+        assert_file_has_content stdout '^2$'
+        $RUN --overlay-src lower1 --overlay-src lower2 --overlay upper work /tmp/x/y/z cat /tmp/x/y/z/a > stdout
+        assert_file_has_content stdout '^4$'
+        $RUN --overlay-src lower1 --overlay-src lower2 --overlay upper work /tmp/x/y/z cat /tmp/x/y/z/b > stdout
+        assert_file_has_content stdout '^3$'
+        $RUN --overlay-src lower1 --overlay-src lower2 --overlay upper work /tmp/x/y/z sh -c 'printf 5 > /tmp/x/y/z/b; cat /tmp/x/y/z/b' > stdout
+        assert_file_has_content stdout '^5$'
+        assert_file_has_content upper/b '^5$'
+        echo "ok - --overlay"
+
+        # Test --overlay path escaping
+        # Coincidentally, :,\ is the face I make contemplating anyone who might
+        # need this functionality, not that that's going to stop me from supporting
+        # it.
+        mkdir 'lower :,\' 'upper :,\' 'work :,\'
+        printf 1 > 'lower :,\'/a
+        $RUN --overlay-src 'lower :,\' --overlay 'upper :,\' 'work :,\' /tmp/x sh -c 'cat /tmp/x/a; printf 2 > /tmp/x/a; cat /tmp/x/a' > stdout
+        assert_file_has_content stdout '^12$'
+        assert_file_has_content 'lower :,\'/a '^1$'
+        assert_file_has_content 'upper :,\'/a '^2$'
+        echo "ok - --overlay path escaping"
+
+        # Test --tmp-overlay
+        printf 1 > lower1/a
+        printf 2 > lower1/b
+        printf 3 > lower2/b
+        if $RUN --tmp-overlay /tmp true 2>err.txt; then
+            assert_not_reached At least one --overlay-src not required
+        fi
+        assert_file_has_content err.txt "^bwrap: --tmp-overlay requires at least one --overlay-src"
+        $RUN --overlay-src lower1 --tmp-overlay /tmp/x/y/z cat /tmp/x/y/z/a > stdout
+        assert_file_has_content stdout '^1$'
+        $RUN --overlay-src lower1 --tmp-overlay /tmp/x/y/z cat /tmp/x/y/z/b > stdout
+        assert_file_has_content stdout '^2$'
+        $RUN --overlay-src lower1 --overlay-src lower2 --tmp-overlay /tmp/x/y/z cat /tmp/x/y/z/a > stdout
+        assert_file_has_content stdout '^1$'
+        $RUN --overlay-src lower1 --overlay-src lower2 --tmp-overlay /tmp/x/y/z cat /tmp/x/y/z/b > stdout
+        assert_file_has_content stdout '^3$'
+        $RUN --overlay-src lower1 --overlay-src lower2 --tmp-overlay /tmp/x/y/z sh -c 'printf 4 > /tmp/x/y/z/b; cat /tmp/x/y/z/b' > stdout
+        assert_file_has_content stdout '^4$'
+        $RUN --overlay-src lower1 --tmp-overlay /tmp/x --overlay-src lower2 --tmp-overlay /tmp/y sh -c 'cat /tmp/x/b; printf 4 > /tmp/x/b; cat /tmp/x/b; cat /tmp/y/b' > stdout
+        assert_file_has_content stdout '^243$'
+        echo "ok - --tmp-overlay"
+
+        # Test --ro-overlay
+        printf 1 > lower1/a
+        printf 2 > lower1/b
+        printf 3 > lower2/b
+        if $RUN --ro-overlay /tmp true 2>err.txt; then
+            assert_not_reached At least two --overlay-src not required
+        fi
+        assert_file_has_content err.txt "^bwrap: --ro-overlay requires at least two --overlay-src"
+        if $RUN --overlay-src lower1 --ro-overlay /tmp true 2>err.txt; then
+            assert_not_reached At least two --overlay-src not required
+        fi
+        assert_file_has_content err.txt "^bwrap: --ro-overlay requires at least two --overlay-src"
+        $RUN --overlay-src lower1 --overlay-src lower2 --ro-overlay /tmp/x/y/z cat /tmp/x/y/z/a > stdout
+        assert_file_has_content stdout '^1$'
+        $RUN --overlay-src lower1 --overlay-src lower2 --ro-overlay /tmp/x/y/z cat /tmp/x/y/z/b > stdout
+        assert_file_has_content stdout '^3$'
+        $RUN --overlay-src lower1 --overlay-src lower2 --ro-overlay /tmp/x/y/z sh -c 'printf 4 > /tmp/x/y/z/b; cat /tmp/x/y/z/b' > stdout
+        assert_file_has_content stdout '^3$'
+        echo "ok - --ro-overlay"
+
+        # Test --overlay-src restrictions
+        if $RUN --overlay-src /tmp true 2>err.txt; then
+            assert_not_reached Trailing --overlay-src allowed
+        fi
+        assert_file_has_content err.txt "^bwrap: --overlay-src must be followed by another --overlay-src or one of --overlay, --tmp-overlay, or --ro-overlay"
+        if $RUN --overlay-src /tmp --chdir / true 2>err.txt; then
+            assert_not_reached --overlay-src allowed to precede non-overlay options
+        fi
+        assert_file_has_content err.txt "^bwrap: --overlay-src must be followed by another --overlay-src or one of --overlay, --tmp-overlay, or --ro-overlay"
+        echo "ok - --overlay-src restrictions"
+
+    fi
+fi
 
 echo "ok - End of test"
