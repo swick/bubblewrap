@@ -161,6 +161,7 @@ struct _SetupOp
   int         perms;
   size_t      size;  /* number of bytes, zero means unset/default */
   SetupOp    *next;
+  SetupOp    *prev;
 };
 
 typedef struct _LockFile LockFile;
@@ -170,6 +171,7 @@ struct _LockFile
   const char *path;
   int         fd;
   LockFile   *next;
+  LockFile   *prev;
 };
 
 enum {
@@ -215,9 +217,14 @@ _ ## name ## _append_new (void) \
   Type *self = xcalloc (sizeof (Type)); \
 \
   if (last_ ## name != NULL) \
-    last_ ## name ->next = self; \
+    { \
+      last_ ## name ->next = self; \
+      self->prev = last_ ## name; \
+    } \
   else \
-    name ## s = self; \
+    { \
+      name ## s = self; \
+    } \
 \
   last_ ## name = self; \
   return self; \
@@ -253,6 +260,7 @@ struct _SeccompProgram
 {
   struct sock_fprog  program;
   SeccompProgram    *next;
+  SeccompProgram    *prev;
 };
 
 DEFINE_LINKED_LIST (SeccompProgram, seccomp_program)
