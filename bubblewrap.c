@@ -136,6 +136,7 @@ typedef enum {
   SETUP_TMP_OVERLAY_MOUNT,
   SETUP_RO_OVERLAY_MOUNT,
   SETUP_OVERLAY_SRC,
+  SETUP_OVERLAY_SRC_INSIDE,
   SETUP_MOUNT_PROC,
   SETUP_MOUNT_DEV,
   SETUP_MOUNT_TMPFS,
@@ -355,7 +356,8 @@ usage (int ecode, FILE *out)
            "    --ro-bind SRC DEST           Bind mount the host path SRC readonly on DEST\n"
            "    --ro-bind-try SRC DEST       Equal to --ro-bind but ignores non-existent SRC\n"
            "    --remount-ro DEST            Remount DEST as readonly; does not recursively remount\n"
-           "    --overlay-src SRC            Read files from SRC in the following overlay\n"
+           "    --overlay-src SRC            Read files from the host path SRC in the following overlay\n"
+           "    --overlay-src-inside SRC     Equal to --overlay-src but SRC is a path inside the sandbox\n"
            "    --overlay RWSRC WORKDIR DEST Mount overlayfs on DEST, with RWSRC as the host path for writes and\n"
            "                                 WORKDIR an empty directory on the same filesystem as RWSRC\n"
            "    --tmp-overlay DEST           Mount overlayfs on DEST, with writes going to an invisible tmpfs\n"
@@ -1260,6 +1262,7 @@ setup_newroot (bool unshare_pid,
 
         /* handled by SETUP_OVERLAY_MOUNT and friends */
         case SETUP_OVERLAY_SRC:
+        case SETUP_OVERLAY_SRC_INSIDE:
           break;
 
         case SETUP_OVERLAY_MOUNT:
@@ -1289,11 +1292,17 @@ setup_newroot (bool unshare_pid,
                           tmp_overlay_idx++);
 
             strappend (&sb, "lowerdir=");
-            while (src_op != NULL && src_op->type == SETUP_OVERLAY_SRC)
+            while (src_op != NULL &&
+                   (src_op->type == SETUP_OVERLAY_SRC ||
+                    src_op->type == SETUP_OVERLAY_SRC_INSIDE))
               {
                 if (multi_src)
                   strappend (&sb, ":");
-                strappend_escape_for_mount_options (&sb, get_oldroot_path (src_op->source));
+
+                if (src_op->type == SETUP_OVERLAY_SRC_INSIDE)
+                  strappend_escape_for_mount_options (&sb, get_newroot_path (src_op->dest));
+                else
+                  strappend_escape_for_mount_options (&sb, get_oldroot_path (src_op->source));
 
                 multi_src = TRUE;
                 src_op = src_op->prev;
@@ -1607,6 +1616,7 @@ resolve_symlinks_in_ops (void)
 
         case SETUP_RO_OVERLAY_MOUNT:
         case SETUP_TMP_OVERLAY_MOUNT:
+        case SETUP_OVERLAY_SRC_INSIDE:
         case SETUP_MOUNT_PROC:
         case SETUP_MOUNT_DEV:
         case SETUP_MOUNT_TMPFS:
@@ -1690,6 +1700,13 @@ is_modifier_option (const char *option)
 {
   return strcmp (option, "--perms") == 0
          || strcmp(option, "--size") == 0;
+}
+
+static int
+is_overlay_src_option (const char *option)
+{
+  return strcmp (option, "--overlay-src") == 0
+         || strcmp(option, "--overlay-src-inside") == 0;
 }
 
 static void
@@ -1930,6 +1947,18 @@ parse_args_recurse (int          *argcp,
 
           op = setup_op_new (SETUP_OVERLAY_SRC);
           op->source = argv[1];
+          next_overlay_src_count++;
+
+          argv += 1;
+          argc -= 1;
+        }
+      else if (strcmp (arg, "--overlay-src-inside") == 0)
+        {
+          if (is_privileged)
+            die ("The --overlay-src-inside option is not permitted in setuid mode");
+
+          op = setup_op_new (SETUP_OVERLAY_SRC_INSIDE);
+          op->dest = argv[1];
           next_overlay_src_count++;
 
           argv += 1;
@@ -2658,19 +2687,30 @@ parse_args_recurse (int          *argcp,
       /* If --perms was set for the current action but the current action
        * didn't consume the setting, apparently --perms wasn't suitable for
        * this action. */
-      if (!is_modifier_option(arg) && next_perms >= 0)
+      if (!is_modifier_option (arg) && next_perms >= 0)
         die ("--perms must be followed by an option that creates a file");
 
       /* Similarly for --size. */
-      if (!is_modifier_option(arg) && next_size_arg != 0)
+      if (!is_modifier_option (arg) && next_size_arg != 0)
         die ("--size must be followed by --tmpfs");
 
       /* Similarly for --overlay-src. */
-      if (strcmp (arg, "--overlay-src") != 0 && next_overlay_src_count > 0)
-        die ("--overlay-src must be followed by another --overlay-src or one of --overlay, --tmp-overlay, or --ro-overlay");
+      if (!is_overlay_src_option (arg) && next_overlay_src_count > 0)
+        {
+          die ("--overlay-src and --overlay-src-inside must be followed by another "
+               "--overlay-src or --overlay-src-inside, "
+               "or one of --overlay, --tmp-overlay, or --ro-overlay");
+        }
 
       argv++;
       argc--;
+    }
+
+  if (next_overlay_src_count > 0)
+    {
+      die ("--overlay-src and --overlay-src-inside must be followed by another "
+           "--overlay-src or --overlay-src-inside, "
+           "or one of --overlay, --tmp-overlay, or --ro-overlay");
     }
 
   *argcp = argc;
@@ -2684,9 +2724,6 @@ parse_args (int          *argcp,
   int total_parsed_argc = *argcp;
 
   parse_args_recurse (argcp, argvp, FALSE, &total_parsed_argc);
-
-  if (next_overlay_src_count > 0)
-    die ("--overlay-src must be followed by another --overlay-src or one of --overlay, --tmp-overlay, or --ro-overlay");
 }
 
 static void

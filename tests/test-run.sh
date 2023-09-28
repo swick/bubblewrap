@@ -8,7 +8,7 @@ srcd=$(cd $(dirname "$0") && pwd)
 
 bn=$(basename "$0")
 
-echo "1..63"
+echo "1..64"
 
 # Test help
 ${BWRAP} --help > help.txt
@@ -631,13 +631,21 @@ else
         if $RUN --overlay-src /tmp true 2>err.txt; then
             assert_not_reached Trailing --overlay-src allowed
         fi
-        assert_file_has_content err.txt "^bwrap: --overlay-src must be followed by another --overlay-src or one of --overlay, --tmp-overlay, or --ro-overlay"
+        assert_file_has_content err.txt "^bwrap: --overlay-src and --overlay-src-inside must be followed"
         if $RUN --overlay-src /tmp --chdir / true 2>err.txt; then
             assert_not_reached --overlay-src allowed to precede non-overlay options
         fi
-        assert_file_has_content err.txt "^bwrap: --overlay-src must be followed by another --overlay-src or one of --overlay, --tmp-overlay, or --ro-overlay"
+        assert_file_has_content err.txt "^bwrap: --overlay-src and --overlay-src-inside must be followed"
         echo "ok - --overlay-src restrictions"
 
+        # Test --overlay-src-inside
+        $RUN --file 11 /tmp/i/a --overlay-src lower1 --overlay-src-inside /tmp/i --ro-overlay /tmp/x/y/z cat /tmp/x/y/z/a 11< <(printf "42") > stdout
+        assert_file_has_content stdout '^42$'
+        $RUN --file 11 /tmp/i/a --overlay-src lower1 --overlay-src-inside /tmp/i --ro-overlay /tmp/x/y/z sh -c 'printf 9 > /tmp/i/a; cat /tmp/x/y/z/a' 11< <(printf "42") > stdout
+        assert_file_has_content stdout '^9$'
+        $RUN --file 11 /tmp/i/a --overlay-src lower1 --overlay-src-inside /tmp/i --ro-overlay /tmp/x/y/z --tmpfs /tmp/i sh -c 'printf 9 > /tmp/i/a; cat /tmp/x/y/z/a' 11< <(printf "42") > stdout
+        assert_file_has_content stdout '^42$'
+        echo "ok - --overlay-src-inside"
     fi
 fi
 

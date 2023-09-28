@@ -311,6 +311,12 @@
       </listitem>
     </varlistentry>
     <varlistentry>
+      <term><option>--overlay-src-inside <arg choice="plain">SRC</arg></option></term>
+      <listitem>
+        <para>Equal to <option>--overlay-src</option> but the <arg choice="plain">SRC</arg> path is inside the sandbox and not a host path.</para>
+      </listitem>
+    </varlistentry>
+    <varlistentry>
       <term><option>--overlay <arg choice="plain">RWSRC</arg> <arg choice="plain">WORKDIR</arg> <arg choice="plain">DEST</arg></option></term>
     </varlistentry>
     <varlistentry>
