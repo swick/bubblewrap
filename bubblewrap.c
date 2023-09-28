@@ -1258,37 +1258,45 @@ setup_newroot (bool unshare_pid,
                          0, 0, source, dest);
           break;
 
+        /* handled by SETUP_OVERLAY_MOUNT and friends */
+        case SETUP_OVERLAY_SRC:
+          break;
+
         case SETUP_OVERLAY_MOUNT:
         case SETUP_RO_OVERLAY_MOUNT:
         case SETUP_TMP_OVERLAY_MOUNT:
           {
             StringBuilder sb = {0};
             bool multi_src = FALSE;
+            SetupOp *src_op = op->prev;
 
             if (mkdir (dest, 0755) != 0 && errno != EEXIST)
               die_with_error ("Can't mkdir %s", op->dest);
 
             if (op->source != NULL)
               {
-                strappend (&sb, "upperdir=/oldroot");
-                strappend_escape_for_mount_options (&sb, op->source);
-                strappend (&sb, ",workdir=/oldroot");
-                op = op->next;
-                strappend_escape_for_mount_options (&sb, op->source);
+                assert (src_op != NULL); /* guaranteed by the constructor */
+
+                strappend (&sb, "upperdir=");
+                strappend_escape_for_mount_options (&sb, get_oldroot_path (op->source));
+                strappend (&sb, ",workdir=");
+                strappend_escape_for_mount_options (&sb, get_oldroot_path (src_op->source));
                 strappend (&sb, ",");
+                src_op = src_op->prev;
               }
             else if (op->type == SETUP_TMP_OVERLAY_MOUNT)
               strappendf (&sb, "upperdir=/tmp-overlay-upper-%1$d,workdir=/tmp-overlay-work-%1$d,",
                           tmp_overlay_idx++);
 
-            strappend (&sb, "lowerdir=/oldroot");
-            while (op->next != NULL && op->next->type == SETUP_OVERLAY_SRC)
+            strappend (&sb, "lowerdir=");
+            while (src_op != NULL && src_op->type == SETUP_OVERLAY_SRC)
               {
-                op = op->next;
                 if (multi_src)
-                  strappend (&sb, ":/oldroot");
-                strappend_escape_for_mount_options (&sb, op->source);
+                  strappend (&sb, ":");
+                strappend_escape_for_mount_options (&sb, get_oldroot_path (src_op->source));
+
                 multi_src = TRUE;
+                src_op = src_op->prev;
               }
 
             privileged_op (privileged_op_socket,
@@ -1542,7 +1550,6 @@ setup_newroot (bool unshare_pid,
                          op->dest, NULL);
           break;
 
-        case SETUP_OVERLAY_SRC:  /* handled by SETUP_OVERLAY_MOUNT */
         default:
           die ("Unexpected type %d", op->type);
         }
@@ -1689,32 +1696,6 @@ static void
 warn_only_last_option (const char *name)
 {
   warn ("Only the last %s option will take effect", name);
-}
-
-static void
-make_setup_overlay_src_ops (const char *const *const argv)
-{
-  /* SETUP_OVERLAY_SRC is unlike other SETUP_* ops in that it exists to hold
-   * data for SETUP_{,TMP_,RO_}OVERLAY_MOUNT ops, not to be its own operation.
-   * This lets us reuse existing code paths to handle resolving the realpaths
-   * of each source, as no other operations involve multiple sources the way
-   * the *_OVERLAY_MOUNT ops do.
-   *
-   * While the --overlay-src arguments are expected to precede the
-   * --overlay argument, in bottom-to-top order, the SETUP_OVERLAY_SRC ops
-   * follow their corresponding *_OVERLAY_MOUNT op, in top-to-bottom order
-   * (the order in which overlayfs will want them). They are handled specially
-   * in setup_new_root () during the processing of *_OVERLAY_MOUNT.
-   */
-  int i;
-  SetupOp *op;
-
-  for (i = 1; i <= next_overlay_src_count; i++)
-    {
-      op = setup_op_new (SETUP_OVERLAY_SRC);
-      op->source = argv[1 - 2 * i];
-    }
-  next_overlay_src_count = 0;
 }
 
 static void
@@ -1947,6 +1928,8 @@ parse_args_recurse (int          *argcp,
           if (is_privileged)
             die ("The --overlay-src option is not permitted in setuid mode");
 
+          op = setup_op_new (SETUP_OVERLAY_SRC);
+          op->source = argv[1];
           next_overlay_src_count++;
 
           argv += 1;
@@ -1965,12 +1948,13 @@ parse_args_recurse (int          *argcp,
           if (next_overlay_src_count < 1)
             die ("--overlay requires at least one --overlay-src");
 
-          op = setup_op_new (SETUP_OVERLAY_MOUNT);
-          op->source = argv[1];
           workdir_op = setup_op_new (SETUP_OVERLAY_SRC);
           workdir_op->source = argv[2];
+
+          op = setup_op_new (SETUP_OVERLAY_MOUNT);
+          op->source = argv[1];
           op->dest = argv[3];
-          make_setup_overlay_src_ops (argv);
+          next_overlay_src_count = 0;
 
           argv += 3;
           argc -= 3;
@@ -1988,8 +1972,8 @@ parse_args_recurse (int          *argcp,
 
           op = setup_op_new (SETUP_TMP_OVERLAY_MOUNT);
           op->dest = argv[1];
-          make_setup_overlay_src_ops (argv);
           opt_tmp_overlay_count++;
+          next_overlay_src_count = 0;
 
           argv += 1;
           argc -= 1;
@@ -2007,7 +1991,7 @@ parse_args_recurse (int          *argcp,
 
           op = setup_op_new (SETUP_RO_OVERLAY_MOUNT);
           op->dest = argv[1];
-          make_setup_overlay_src_ops (argv);
+          next_overlay_src_count = 0;
 
           argv += 1;
           argc -= 1;
