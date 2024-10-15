@@ -126,6 +126,7 @@ typedef enum {
   SETUP_MOUNT_DEV,
   SETUP_MOUNT_TMPFS,
   SETUP_MOUNT_MQUEUE,
+  SETUP_MOUNT_CGROUP,
   SETUP_MAKE_DIR,
   SETUP_MAKE_FILE,
   SETUP_MAKE_BIND_FILE,
@@ -171,6 +172,7 @@ enum {
   PRIV_SEP_OP_TMPFS_MOUNT,
   PRIV_SEP_OP_DEVPTS_MOUNT,
   PRIV_SEP_OP_MQUEUE_MOUNT,
+  PRIV_SEP_OP_CGROUP_MOUNT,
   PRIV_SEP_OP_REMOUNT_RO_NO_RECURSIVE,
   PRIV_SEP_OP_SET_HOSTNAME,
 };
@@ -342,6 +344,7 @@ usage (int ecode, FILE *out)
            "    --dev DEST                   Mount new dev on DEST\n"
            "    --tmpfs DEST                 Mount new tmpfs on DEST\n"
            "    --mqueue DEST                Mount new mqueue on DEST\n"
+           "    --cgroup DEST                Mount new cgroupfs with nsdelegate on DEST\n"
            "    --dir DEST                   Create dir at DEST\n"
            "    --file FD DEST               Copy from FD to destination DEST\n"
            "    --bind-data FD DEST          Copy from FD to file which is bind-mounted on DEST\n"
@@ -811,6 +814,20 @@ set_ambient_capabilities (void)
   prctl_caps (requested_caps, false, true);
 }
 
+static bool
+supports_nsdelegate (void)
+{
+  cleanup_free char *features_data = NULL;
+  char *found;
+
+  features_data = load_file_at (AT_FDCWD, "/sys/kernel/cgroup/features");
+  if (features_data == NULL)
+    die_with_error ("Can't read /sys/kernel/cgroup/features");
+
+  found = strstr(features_data, "nsdelegate\n");
+  return found != NULL;
+}
+
 /* This acquires the privileges that the bwrap will need it to work.
  * If bwrap is not setuid, then this does nothing, and it relies on
  * unprivileged user namespaces to be used. This case is
@@ -1073,8 +1090,8 @@ privileged_op (int         privileged_op_socket,
    *  * Bind mounts are safe, since we always use filesystem namespace. They
    *     must be recursive though, as otherwise you can use a non-recursive bind
    *     mount to access an otherwise over-mounted mountpoint.
-   *  * Mounting proc, tmpfs, mqueue, devpts in the child namespace is assumed to
-   *    be safe.
+   *  * Mounting proc, tmpfs, mqueue, devpts, cgroup in the child namespace is
+   *    assumed to be safe.
    *  * Remounting RO (even non-recursive) is safe because it decreases privileges.
    *  * sethostname() is safe only if we set up a UTS namespace
    */
@@ -1139,6 +1156,12 @@ privileged_op (int         privileged_op_socket,
     case PRIV_SEP_OP_MQUEUE_MOUNT:
       if (mount ("mqueue", arg1, "mqueue", 0, NULL) != 0)
         die_with_mount_error ("Can't mount mqueue on %s", arg1);
+      break;
+
+    case PRIV_SEP_OP_CGROUP_MOUNT:
+      if (mount ("cgroup", arg1, "cgroup", MS_NOSUID | MS_NOEXEC,
+                 "nsdelegate") != 0)
+        die_with_mount_error ("Can't mount cgroupfs on %s", arg1);
       break;
 
     case PRIV_SEP_OP_SET_HOSTNAME:
@@ -1397,6 +1420,16 @@ setup_newroot (bool unshare_pid,
                          dest, NULL);
           break;
 
+        case SETUP_MOUNT_CGROUP:
+          // FIXME: unshare-cgroup means we might or might not require nsdelegate
+          if (!supports_nsdelegate())
+            die_with_error ("No support for nsdelegate");
+
+          privileged_op (privileged_op_socket,
+                         PRIV_SEP_OP_CGROUP_MOUNT, 0, 0, 0,
+                         dest, NULL);
+          break;
+
         case SETUP_MAKE_DIR:
           assert (dest != NULL);
           assert (op->perms >= 0);
@@ -1571,6 +1604,7 @@ resolve_symlinks_in_ops (void)
         case SETUP_MOUNT_DEV:
         case SETUP_MOUNT_TMPFS:
         case SETUP_MOUNT_MQUEUE:
+        case SETUP_MOUNT_CGROUP:
         case SETUP_MAKE_DIR:
         case SETUP_MAKE_FILE:
         case SETUP_MAKE_BIND_FILE:
@@ -2007,6 +2041,17 @@ parse_args_recurse (int          *argcp,
             die ("--mqueue takes an argument");
 
           op = setup_op_new (SETUP_MOUNT_MQUEUE);
+          op->dest = argv[1];
+
+          argv += 1;
+          argc -= 1;
+        }
+      else if (strcmp (arg, "--cgroup") == 0)
+        {
+          if (argc < 2)
+            die ("--cgroup takes an argument");
+
+          op = setup_op_new (SETUP_MOUNT_CGROUP);
           op->dest = argv[1];
 
           argv += 1;
